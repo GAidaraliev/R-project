@@ -1,0 +1,352 @@
+---
+title: "Airbnb"
+output: html_document
+date: "2023-12-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Objectives of the project**:
+
++ Visit frequency of the different quarters according to time
++ Number of apartments per owner
++ Relationship between prices and apartment features
++ Renting price per city quarter ("arroundissments")
+
+# Data cleaning and processing
+
+```{r}
+setwd('/Users/Gali/Desktop/DataScienceTechInstitute/17. Big data with R/')
+getwd()
+```
+Load the provided data set `AirBnB (1).Rdata` and observe what is inside of it.
+
+```{r}
+load(file='C:/Users/Gali/Desktop/DataScienceTechInstitute/17. Big data with R/AirBnB (1).Rdata')
+test2 <- L
+head(test2)
+```
+
+It should be mentioned that the following libraries must be installed as they provide necessary tools for our analysis. 
+
+```{r}
+library(dplyr)
+library(stringr) 
+library(ggplot2)
+library(leaflet)
+library(ggridges)
+```
+
+At this stage, we started to select the most appropriate parameters that should be consistent with objectives of the project. That is why we excluded the observations consisting of descriptions. As a result, we reduced the number of parameters from 95 to 37
+
+```{r}
+test2 <- select(test2, host_id, host_name, host_since, host_response_rate, host_acceptance_rate, host_is_superhost, host_total_listings_count, host_identity_verified, neighbourhood_cleansed, latitude, longitude, is_location_exact, property_type, room_type, accommodates, bathrooms, bedrooms, beds, bed_type, price, guests_included, extra_people, minimum_nights, maximum_nights, availability_30, availability_60, availability_90, availability_365, number_of_reviews, first_review, instant_bookable, cancellation_policy, require_guest_profile_picture, require_guest_phone_verification, calculated_host_listings_count, reviews_per_month, review_scores_rating)
+
+dim(test2)
+```
+`
+The following is a summary of our data set.
+It can be noticed that some variables have missing values therefore we need to transform them before making some conclusions in the analysis. By the way we also see zero values for parameters which should not have any *(bedrooms, bathrooms, etc)* that is why we need to investigate and pre-process them too.
+
+```{r}
+summary(test2)
+```
+
+Initially, there were 30524 missing values, however after some processing their number was increased to 73419 values. 
+
+```{r}
+sum(is.na(test2)) 
+test2[test2 == ""] <- NA
+test2[test2 == "N/A"] <- NA
+sum(is.na(test2)) 
+```
+
+The following parameters have the most of the missing values which should be replaced or omitted.
+
+```{r}
+NAs_qty = colSums(is.na(test2))
+NAs_prop = round(NAs_qty/nrow(test2), 3)
+NAs.df <- data.frame(NAs_qty, NAs_prop)
+NAs.df[NAs.df$NAs_prop > 0.01, ]
+```
+
+Some of those features require certain transformations of the data type in order to use them properly. 
+It is also worth noting that `first_review` determines the visit frequency that is why it was decided to replace some omissions with values of `host_since` as we consider that this assumption may be relevant for hosts who has just one apartment.   
+
+```{r}
+test2$host_response_rate <- as.numeric(sub("%", " ", test2$host_response_rate))
+test2$host_acceptance_rate <- as.numeric(sub("%", " ", test2$host_acceptance_rate))
+
+test2 <- test2 %>% mutate(first_review = case_when (
+  is.na(first_review) & calculated_host_listings_count == 1  ~ host_since,
+  .default = first_review ))
+
+test2 = test2 %>%
+  mutate(first_review = as.Date(paste(first_review,sep='-')))
+```
+
+The final outcomes of the modified features must be presented in the form of histograms as we need to estimate the data distribution.  
+
+```{r}
+par(mfrow = c(2,2))
+hist(test2$host_response_rate,breaks = 30, col="lavender", main = "Host response rate",xlab="host response rate")
+hist(test2$host_acceptance_rate,breaks = 30, col="lavender", main = "Acceptance rate",xlab="host acceptance rate")
+hist(test2$reviews_per_month,breaks = 30, col="lavender", main = "Reviews per month",xlab="reviews per month")
+hist(test2$review_scores_rating ,breaks = 30, col="lavender", main = "Review scores rating",xlab="review scores rating")
+```
+
+According to these diagrams, it can be said that the missing values might be replaced with median which is a mean for skewed distributions. 
+
+```{r}
+test2$host_response_rate[is.na(test2$host_response_rate)] <- median(test2$host_response_rate, na.rm = TRUE)
+test2$host_acceptance_rate[is.na(test2$host_acceptance_rate)] <- median(test2$host_acceptance_rate, na.rm = TRUE)
+test2$reviews_per_month[is.na(test2$reviews_per_month)] <- median(test2$reviews_per_month, na.rm = TRUE)
+test2$review_scores_rating[is.na(test2$review_scores_rating)] <- median(test2$review_scores_rating, na.rm = TRUE)
+```
+
+Now we check the data frame of the missing values again in order to justify the possibility to exclude the rest of these data. As it can be seen below that maximum of omissions operates at 5% therefore they can be neglected. 
+
+```{r}
+NAs_qty = colSums(is.na(test2))
+NAs_prop = round(NAs_qty/nrow(test2), 3)
+NAs.df <- data.frame(NAs_qty, NAs_prop)
+NAs.df[order(-NAs.df$NAs_prop),]
+```
+
+```{r}
+test2 <- na.omit(test2)
+```
+
+It is also worth to say that `price` and `extra_people` were converted to numerical value in this project.
+
+```{r}
+pattern <- "\\$(\\d+)"
+test2$price <- as.numeric(str_match((str_replace_all(test2$price, ",", "")), pattern)[,2])
+test2$extra_people <- as.numeric(str_match((str_replace_all(test2$extra_people, ",", "")), pattern)[,2])
+```
+
+As it was mentioned earlier, some observations have zero values which should be definitely replaced. The following steps are directed exactly at this purpose.   
+
+```{r}
+zero_qty = colSums(test2[,1:37]==0)
+zero_prop = round(zero_qty/nrow(test2), 3)
+zero.df <- data.frame(zero_qty, zero_prop)
+zero.df <- arrange(zero.df,desc(zero_qty))
+zero.df[zero.df$zero_qty != 0, ]
+```
+
+The same replacing procedure is presented below where median substitutes for zero values.  
+
+```{r}
+par(mfrow = c(1,2))
+hist(test2$number_of_reviews ,breaks = 30, col="lavender", main = "Number of reviews",xlab="number of reviews")
+hist(test2$host_acceptance_rate ,breaks = 30, col="lavender", main = "Host acceptance rate",xlab="host acceptance rate")
+```
+
+```{r}
+test2$number_of_reviews[test2$number_of_reviews == 0] <- median(test2$number_of_reviews, na.rm = TRUE)
+test2$host_acceptance_rate[test2$host_acceptance_rate == 0] <- median(test2$host_acceptance_rate, na.rm = TRUE)
+```
+
+The `beds` parameter should be processed differently therefore we need to calculate the amount of observations separately to each category. As it can be seen, most of the data is divided into three main groups.  
+
+```{r}
+beds_zero_val <- select(test2,bedrooms, beds) %>% filter(bedrooms == 0) %>% group_by(beds)%>%
+ mutate(Counts = n()) %>% summarise(beds_qty = unique(Counts))
+beds_zero_val
+```
+
+After that we assumed that it can be appropriate to determine the bed's categories based on the relationship between bedrooms and beds. 
+
+```{r}
+test2 %>% 
+  ggplot(aes(x=factor(bedrooms), y=beds, fill=factor(bedrooms))) +
+  geom_boxplot(show.legend = FALSE) + ggtitle("The relationship between beds and bedrooms") + theme(
+plot.title = element_text(color="black", size=14, face="bold.italic", hjust = 0.5))
+```
+
+According to this box plot, the following conditional algorithm was implemented.
+
+```{r}
+test2 <- test2 %>%
+  mutate(bedrooms = ifelse(bedrooms == 0 & beds == 1, median(test2$bedrooms[test2$beds == 1], na.rm = TRUE),
+  ifelse(bedrooms == 0 & beds == 2, median(test2$bedrooms[test2$beds == 2], na.rm = TRUE),ifelse(bedrooms == 0 & beds > 2, 3, test2$bedrooms)
+)))
+```
+
+For the next features, it was decided to filter them as the proportion of zero values of less than 1% 
+
+```{r}
+test2 <- test2 %>% filter(bathrooms > 0)
+test2 <- test2 %>% filter(host_total_listings_count> 0)
+test2 <- test2 %>% filter(price > 0)
+test2 <- test2 %>% filter(beds > 0)
+```
+
+As the result, we have 49431 values which is only 7% less than we had before these manipulations.  
+
+```{r}
+dim(test2)
+```
+
+## Exploratory data analysis
+
+**1) Visit frequency of the different quarters according to time**
+
+It can be seen that all neighborhoods have almost similar distributions of the visit frequency. So it can supposed that location does not have so much influence on the tourist choice. 
+
+```{r}
+for (i in unique(test2$neighbourhood_cleansed)){
+  hist(test2$first_review[test2$neighbourhood_cleansed == i],breaks = "month", col="lavender", main = i,xlab="Date")
+}
+```
+
+
+**2) Number of apartments per owner**
+
+Using `host_id` we could to calculate the number of apartments per owner. As the result we have 44175 individual owners. The top 50 hosts of this list is presented below in the form of histogram. Some names are repeated that is why they were overlapped with each other. 
+
+```{r}
+appart_per_owner <- select(test2, host_id, host_name) %>% group_by(host_id) %>% mutate(Counts = n())
+appart_per_owner <- appart_per_owner[!duplicated(appart_per_owner$host_id),] %>% 
+  arrange(desc(Counts))
+
+appart_per_owner  
+```
+
+```{r}
+ggplot(data=appart_per_owner[1:50,], aes(x=(reorder(host_name,  -Counts)),  y=Counts)) +
+  geom_bar(stat="identity", color="black", fill="red")+
+  geom_text(aes(label=Counts), vjust=-0.3, size=2.5) + xlab("owner's name") + ylab("apart_num") +
+  theme(axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) + ggtitle("Number of apartments of top 50 hosts") + theme(plot.title = element_text(color="black", size=14, face="bold.italic", hjust = 0.5))
+
+```
+
+**3) Relationship between prices and apartment features**
+
+To start with, it was necessary to include a new feature `log_price` in the data set as it was required to normalize `price` parameter for the further exploitation. 
+
+```{r}
+test2$log_price <- log(test2$price)
+```
+
+All these different box plots demonstrate the relationships between prices and apartment features. 
+In general, we see the increasing trend which indicates that the prices depend on the number of the apartment features. However, the increase of the number of bathrooms has a positive effect until *4.5* after that the downward trend prevails. 
+
+```{r}
+ggplot(data = test2) +
+  geom_boxplot(aes(x=factor(beds),y=log_price, fill=factor(beds))) + xlab("beds") + ggtitle("The relationship between prices and apartment feature") + theme(
+plot.title = element_text(color="black", size=14, face="bold.italic", hjust = 0.5)) + guides(fill = guide_legend(title = "Bed"))
+ggplot(data = test2) +
+  geom_boxplot(aes(x=factor(bedrooms),y=log_price, fill=factor(bedrooms))) + xlab("bedrooms") + ggtitle("The relationship between prices and apartment feature") + theme(
+plot.title = element_text(color="black", size=14, face="bold.italic", hjust = 0.5)) + guides(fill = guide_legend(title = "Bedroom"))
+ggplot(data = test2) +
+  geom_boxplot(aes(x=factor(bathrooms),y=log_price, fill=factor(bathrooms))) + xlab("bathrooms") + ggtitle("The relationship between prices and apartment feature") + theme(
+plot.title = element_text(color="black", size=14, face="bold.italic", hjust = 0.5)) + guides(fill = guide_legend(title = "Bathroom"))
+```
+
+The group division was also investigated where we can observe the same trend for all of the neighborhoods.
+
+```{r}
+ggplot(data = test2) +
+  geom_boxplot(aes(x=factor(beds),y=log_price)) +
+  facet_wrap(~ neighbourhood_cleansed) +
+  theme_minimal(base_size=8.5) + xlab("beds")
+```
+
+```{r}
+ggplot(data = test2) +
+  geom_boxplot(aes(x=factor(bedrooms),y=log_price)) +
+  facet_wrap(~ neighbourhood_cleansed) +
+  theme_minimal(base_size=13) + xlab("bedrooms")
+```
+
+```{r}
+ggplot(data = test2) +
+  geom_boxplot(aes(x=factor(bathrooms),y=log_price)) +
+  facet_wrap(~ neighbourhood_cleansed)+
+  theme_minimal(base_size=8) +
+  theme(axis.text.x = element_text(angle=90, vjust=0.5)) + xlab("bathrooms")
+```
+
+ The last diagram differentiates the quarters *(these include Elysee, Passy, Palais-Bourbon, Luxembourg, etc)* with most expensive apartments relatively to the main features .
+ 
+```{r}
+ggplot(data = test2) +
+  geom_point(aes(x=bedrooms,y=bathrooms,size=price, col=log_price)) + scale_colour_gradient(low = "white", high = "black") +
+  facet_wrap(~ neighbourhood_cleansed, nrow=3)
+```
+
+**4) Renting price per city quarter ("arroundissments")**
+
+The mean price was calculated for each quarter. In general, the results prove the previous statement about the neighborhoods.  
+
+```{r}
+neighbor_price <- test2 %>% select(neighbourhood_cleansed, price) %>%
+  group_by(neighbourhood_cleansed) %>%
+  mutate(average_price_per_neighb = mean(price)) %>% summarise(unique(average_price_per_neighb))
+colnames(neighbor_price) = c("Neighbourhood","Average_price")
+neighbor_price[order(-neighbor_price$Average_price),]
+```
+
+The following diagrams show the variance between different neighborhoods where the richest quarters can be easily identified. 
+
+```{r}
+ggplot(test2, aes(x=neighbourhood_cleansed, y=log_price, fill=neighbourhood_cleansed)) +
+  geom_boxplot(show.legend = FALSE) + coord_flip()  + xlab("neighborhood")
+```
+
+```{r}
+ggplot(test2, aes(x=neighbourhood_cleansed, y=log_price, fill=neighbourhood_cleansed)) + 
+  geom_violin(trim=FALSE)  + xlab("neighbourhood") +
+  ggtitle("Renting price per city quarter") + theme(plot.title = element_text(color="black", size=14, face="bold.italic", hjust = 0.5)) +
+        theme(axis.text.x = element_text(angle=90, hjust=1)) + geom_boxplot(width=0.1)
+  
+```
+
+```{r}
+ggplot(data = test2, mapping = aes(x = price, y = neighbourhood_cleansed)) +
+    geom_density_ridges(mapping = aes(fill = neighbourhood_cleansed), bandwidth = 130, alpha = .6, size = 1) +
+  theme_ridges()  +
+  xlab("Price") +
+    ylab("") +
+    ggtitle("Price behavior ") + xlim(-250,2000) + guides(fill = guide_legend(title = "Neighborhood"))
+```
+
+It was also interesting to represent the price range on the map *(using leaflet tool)* to observe the difference between neighborhoods. For this purpose we created a new feature `price_group`. 
+From this map it can be concluded that the closer to the center the more expensive it gets.
+
+```{r}
+test2 <- test2 %>% mutate(price_group=ifelse(price < 50, "Low", ifelse(price > 50 & price < 100, "Moderate", "High" )))
+```
+
+
+```{r}
+ pal <- colorFactor(palette = c("red", "green", "blue"), domain = test2$price_group)
+ 
+ leaflet(data = test2) %>% addProviderTiles(providers$CartoDB.Positron) %>%  addCircleMarkers(~longitude, ~latitude, color = ~pal(price_group), weight = 1, radius=1, fillOpacity = 0.1, opacity = 0.1,                  label = paste("Neighbourhood:", test2$neighbourhood_cleansed)) %>% 
+     addLegend("bottomright", pal = pal, values = ~price_group,
+     title = "Price groups",
+     opacity = 1
+   )
+```
+
+
+```{r}
+#save(test2,file='Airbnb_cleansed.Rdata')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
